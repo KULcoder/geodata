@@ -526,6 +526,27 @@ def pm25(cutout: Cutout, **params):
 
     return cutout._convert_cutout(convert_func=convert_pm25, **params)
 
+def _get_var(ds, var):
+    """
+    (Internal) Extract a specific variable from cutout
+    See: get_var
+    """
+    return xr.DataArray(ds[var], coords=ds.coords)
+
+
+def get_var(cutout, var, **params):
+    """
+    Extract a specific variable from cutout
+
+    Parameters
+    ----------
+    var : str
+            Name of variable to extract from dataset
+
+    Returns: dataarray
+    """
+    logger.info("Getting variable: %s", str(var))
+    return cutout._convert_cutout(convert_func=_get_var, var=var, **params)
 
 __all__ = [
     "heat_demand",
