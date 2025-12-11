@@ -43,7 +43,7 @@ def _add_height(ds):
     return ds
 
 
-def preprocess_wind_solar_dataset(ds: xr.Dataset) -> xr.Dataset:
+def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = False) -> xr.Dataset:
     """Preprocess ERA5 wind-solar dataset to convert raw variables to processed format.
     
     This function applies the same preprocessing logic used in prepare_func, but works
@@ -52,6 +52,8 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset) -> xr.Dataset:
     
     Args:
         ds: Raw ERA5 wind-solar dataset with variables like u100, v100, t2m, fdir, etc.
+        compute_binary_ops: If True, compute variables needed for binary operations
+            to avoid file handle issues with lazy arrays and parallel reading.
     
     Returns:
         Preprocessed dataset with variables like influx_diffuse, influx_direct, 
@@ -66,6 +68,24 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset) -> xr.Dataset:
         ds = ds.rename({"fdir": "influx_direct"})
     if 'tisr' in ds.data_vars:
         ds = ds.rename({"tisr": "influx_toa"})
+    
+    # Compute variables needed for binary operations if requested
+    # This avoids file handle issues with parallel reading when doing coordinate merging.
+    # We load these variables right before they're used in binary operations to ensure
+    # both operands are in memory, avoiding file access during coordinate merging.
+    if compute_binary_ops:
+        vars_to_load = set()
+        if 'ssrd' in ds.data_vars and 'ssr' in ds.data_vars:
+            vars_to_load.update(['ssrd', 'ssr'])
+        if 'ssrd' in ds.data_vars and 'influx_direct' in ds.data_vars:
+            vars_to_load.update(['ssrd', 'influx_direct'])
+        if 'u100' in ds.data_vars and 'v100' in ds.data_vars:
+            vars_to_load.update(['u100', 'v100'])
+        
+        # Load variables (removes duplicates automatically via set)
+        for var in vars_to_load:
+            if var in ds.data_vars:
+                ds[var] = ds[var].load()
     
     # Step 3: Calculate albedo
     if 'ssrd' in ds.data_vars and 'ssr' in ds.data_vars:
@@ -201,13 +221,14 @@ class ERA5WindSolarBaseDataset(ERA5BaseDataset):
         
         logger.info("Dataset needs preprocessing, applying preprocessing...")
         
-        # Apply preprocessing without loading into memory
-        # Most xarray operations (renames, calculations, coordinate changes) work fine with lazy arrays.
-        # Loading the entire dataset into memory can cause memory exhaustion with large datasets,
-        # especially in Dask workers. The dataset will be computed later when needed (e.g., when
-        # converting to dataframe or saving to disk), allowing Dask to manage memory more efficiently.
-        logger.debug("Applying preprocessing to lazy dataset (will compute later when needed)...")
-        ds_preprocessed = preprocess_wind_solar_dataset(ds)
+        # Binary operations on lazy arrays (like subtraction) require coordinate merging,
+        # which triggers file access and can cause HDF5/netCDF4 file handle issues with parallel reading.
+        # To avoid loading the entire dataset (which causes memory exhaustion),
+        # we pass a flag to preprocess_wind_solar_dataset to compute only the variables
+        # needed for binary operations, right before those operations are performed.
+        # Other operations (renames, drops) remain lazy.
+        logger.debug("Applying preprocessing with selective computation of variables for binary operations...")
+        ds_preprocessed = preprocess_wind_solar_dataset(ds, compute_binary_ops=True)
         
         # Optionally save to disk
         if save_path is not None:
