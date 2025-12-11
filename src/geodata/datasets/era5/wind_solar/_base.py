@@ -213,7 +213,8 @@ class ERA5WindSolarBaseDataset(ERA5BaseDataset):
             True if the file needs preprocessing, False otherwise
         """
         try:
-            with xr.open_dataset(file_path) as ds:
+            # Use h5netcdf engine for ERA5 wind_solar files (required for HDF compatibility)
+            with xr.open_dataset(file_path, engine='h5netcdf') as ds:
                 return not self.is_preprocessed(ds)
         except Exception as e:
             logger.warning(

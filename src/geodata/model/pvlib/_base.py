@@ -235,7 +235,7 @@ class PVLib(BaseModel):
         files = sum([result.ref_files for result in results], [])
         from .._base import _get_xr_engine, _should_use_parallel_reading
         
-        engine = _get_xr_engine()
+        engine = "h5netcdf"
         parallel = _should_use_parallel_reading()
         logger.info(
             f"estimate: Opening {len(files)} files with engine={engine}, parallel={parallel}"
