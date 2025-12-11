@@ -119,13 +119,51 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
                 ) as zip_ref:
                     zip_ref.extractall(tempdir)
 
-                with xr.open_mfdataset(
-                    [
-                        os.path.join(tempdir, f)
-                        for f in os.listdir(tempdir)
-                        if f.endswith(".nc")
-                    ]
-                ) as ds:
+                # Check each extracted NetCDF file for corruption before opening
+                nc_files = [
+                    os.path.join(tempdir, f)
+                    for f in os.listdir(tempdir)
+                    if f.endswith(".nc")
+                ]
+                
+                valid_files = []
+                corrupted_files = []
+                
+                for nc_file in nc_files:
+                    try:
+                        # Try to open the file to check if it's valid
+                        with xr.open_dataset(nc_file) as test_ds:
+                            # Just verify it can be opened, don't load data
+                            _ = test_ds.dims
+                        valid_files.append(nc_file)
+                    except (OSError, IOError) as e:
+                        logger.warning(
+                            f"Corrupted NetCDF file detected in zip: {nc_file}. "
+                            f"Error: {e}. Skipping this file."
+                        )
+                        corrupted_files.append(nc_file)
+                    except Exception as e:
+                        logger.warning(
+                            f"Unexpected error checking file {nc_file}: {e}. "
+                            "Skipping this file."
+                        )
+                        corrupted_files.append(nc_file)
+                
+                if not valid_files:
+                    error_msg = (
+                        f"All {len(nc_files)} extracted NetCDF files are corrupted. "
+                        "Cannot proceed with download."
+                    )
+                    logger.error(error_msg)
+                    raise OSError(error_msg)
+                
+                if corrupted_files:
+                    logger.warning(
+                        f"Skipping {len(corrupted_files)} corrupted file(s) out of "
+                        f"{len(nc_files)} total. Proceeding with {len(valid_files)} valid file(s)."
+                    )
+
+                with xr.open_mfdataset(valid_files) as ds:
                     ds.to_netcdf(save_path)
 
                 logger.info("Preprocessing complete with zipfile")
