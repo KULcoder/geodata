@@ -225,8 +225,11 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
                     logger.info(f"  results = ERA5WindSolarHourlyDataset.test_netcdf_files({saved_files[1:]})  # Skip zip file")
                     logger.info(f"  print(results)")
 
+                # Open with h5netcdf engine (required for ERA5 files)
+                # Write with h5netcdf engine as well to avoid HDF compatibility issues
+                # This allows writing without loading entire dataset into memory
                 with xr.open_mfdataset(nc_files, engine='h5netcdf') as ds:
-                    ds.to_netcdf(save_path)
+                    ds.to_netcdf(save_path, engine='h5netcdf')
 
                 logger.info("Preprocessing complete with zipfile")
                 logger.info("Successfully downloaded to %s", save_path)
