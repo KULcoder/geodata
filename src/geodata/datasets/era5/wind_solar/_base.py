@@ -20,6 +20,13 @@ from pathlib import Path
 import xarray as xr
 import numpy as np
 
+try:
+    import dask.array as da
+    HAS_DASK = True
+except ImportError:
+    da = None
+    HAS_DASK = False
+
 from geodata.types import PathLike
 from .._base import ERA5BaseDataset, _subset_x_y_era5
 
@@ -83,19 +90,45 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
         if 'u100' in ds.data_vars and 'v100' in ds.data_vars:
             vars_to_load.update(['u100', 'v100'])
         
-        # Compute subset of dataset containing only needed variables
-        # With parallel reading, file handles can't be reliably accessed later,
-        # so we compute the subset now using Dask's compute() which handles
-        # parallel backends better than individual .load() calls.
+        # Chunk and compute subset of dataset containing only needed variables
+        # With parallel reading, file handles can't be reliably accessed later.
+        # To avoid memory exhaustion, we chunk the data first so Dask can process
+        # it in smaller pieces rather than loading everything at once.
         if vars_to_load:
             vars_list = [v for v in vars_to_load if v in ds.data_vars]
             if vars_list:
-                # Extract subset and compute it - this triggers file access through
-                # xarray/Dask's proper mechanisms rather than individual variable access
-                logger.debug(f"Computing subset of variables: {vars_list}")
+                logger.debug(f"Chunking and computing subset of variables: {vars_list}")
                 subset = ds[vars_list]
-                # Use compute() which works with Dask arrays and handles parallel backends
+                
+                # Check if data is already chunked (Dask-backed)
+                if HAS_DASK and da is not None:
+                    is_chunked = any(
+                        isinstance(subset[var].data, da.Array)
+                        for var in vars_list
+                    )
+                else:
+                    is_chunked = False
+                
+                if not is_chunked:
+                    # Chunk the subset to enable Dask memory management
+                    # Use reasonable chunk sizes: chunk time dimension, keep spatial dims together
+                    # This allows Dask to process data in manageable pieces
+                    chunk_sizes = {}
+                    for dim in subset.dims:
+                        if dim in ['valid_time', 'time']:
+                            # Chunk time dimension (e.g., 100 timesteps at a time)
+                            chunk_sizes[dim] = min(100, subset.dims[dim])
+                        else:
+                            # Keep spatial dimensions unchunked or lightly chunked
+                            chunk_sizes[dim] = -1  # Single chunk per dimension
+                    
+                    logger.debug(f"Chunking subset with chunk sizes: {chunk_sizes}")
+                    subset = subset.chunk(chunk_sizes)
+                
+                # Now compute - Dask will handle memory through its scheduler
+                # This processes data in chunks rather than loading everything at once
                 subset_computed = subset.compute()
+                
                 # Assign computed variables back to the dataset
                 for var in vars_list:
                     ds[var] = subset_computed[var]
