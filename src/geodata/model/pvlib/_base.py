@@ -484,6 +484,10 @@ class PVLib(BaseModel):
                 logger.debug("Detected raw ERA5 variables, applying preprocessing using dataset's shared function...")
                 try:
                     from ...datasets.era5.wind_solar._base import preprocess_wind_solar_dataset
+                    # Load data before preprocessing to avoid file handle issues with parallel reading
+                    # Preprocessing involves coordinate merging operations that can fail with lazy arrays
+                    logger.debug("Loading dataset before preprocessing to avoid parallel reading issues...")
+                    ds = ds.load()
                     ds = preprocess_wind_solar_dataset(ds)
                     logger.debug("Preprocessing complete. Available variables: %s", list(ds.data_vars.keys()))
                 except ImportError:
