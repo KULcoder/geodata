@@ -474,15 +474,22 @@ class PVLib(BaseModel):
                 Dataset containing necessary variables to run `pvlib` model simulations.
 
             """
-            # Ensure dataset is preprocessed using the dataset class method
-            # This handles checking, preprocessing, and optionally saving
+            # Check if dataset is preprocessed - datasets should be preprocessed
+            # during download, not during model estimation. This avoids parallel
+            # reading file handle issues.
             try:
                 from ...datasets.era5.wind_solar._base import ERA5WindSolarBaseDataset
-                ds = ERA5WindSolarBaseDataset.ensure_preprocessed(ds)
-                logger.debug("Preprocessing check complete. Available variables: %s", list(ds.data_vars.keys()))
+                if not ERA5WindSolarBaseDataset.is_preprocessed(ds):
+                    raise ValueError(
+                        "Dataset is not preprocessed. Please ensure the dataset was "
+                        "downloaded with a recent version of geodata that performs "
+                        "preprocessing during download. If you have existing raw data, "
+                        "you may need to re-download it or manually preprocess it."
+                    )
+                logger.debug("Dataset is preprocessed. Available variables: %s", list(ds.data_vars.keys()))
             except ImportError:
-                logger.warning("Could not import ERA5WindSolarBaseDataset. Dataset may already be preprocessed.")
-                # If import fails, assume dataset is already preprocessed or will fail with clear error
+                logger.warning("Could not import ERA5WindSolarBaseDataset. Assuming dataset is preprocessed.")
+                # If import fails, assume dataset is already preprocessed
             
             # Extract only needed variables if specified
             if varnames:

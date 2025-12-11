@@ -200,6 +200,53 @@ class ERA5WindSolarBaseDataset(ERA5BaseDataset):
     which use single-level data from the reanalysis-era5-single-levels product.
     """
 
+    def _check_needs_postprocess(self, file_path) -> bool:
+        """Check if an existing file needs preprocessing.
+        
+        Opens the file and checks if it's preprocessed using is_preprocessed.
+        If the file contains raw variables, it needs preprocessing.
+        
+        Args:
+            file_path: Path to the file to check
+            
+        Returns:
+            True if the file needs preprocessing, False otherwise
+        """
+        try:
+            with xr.open_dataset(file_path) as ds:
+                return not self.is_preprocessed(ds)
+        except Exception as e:
+            logger.warning(
+                f"Could not check if {file_path} needs preprocessing: {e}. "
+                "Assuming it needs postprocessing to be safe."
+            )
+            return True
+
+    def _dataset_postprocess(self, ds: xr.Dataset | xr.DataArray, **kwargs) -> xr.Dataset | xr.DataArray:
+        """Postprocess the dataset after download.
+        
+        This method performs preprocessing (converting raw variables to processed format)
+        during dataset download. This avoids parallel reading issues that occur when
+        preprocessing is done later during model estimation.
+        
+        Args:
+            ds: Raw dataset from download
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Preprocessed dataset
+        """
+        # Only preprocess if it's a Dataset (preprocessing logic expects Dataset)
+        if isinstance(ds, xr.Dataset):
+            # Apply preprocessing during download - files are opened one at a time
+            # with xr.open_dataset (not parallel), so we can safely compute binary operations
+            logger.debug("Applying preprocessing during dataset download...")
+            # Use compute_binary_ops=True since we're in a single-file context without parallel reading
+            return preprocess_wind_solar_dataset(ds, compute_binary_ops=True)
+        else:
+            # For DataArray, just return as-is (preprocessing expects Dataset)
+            return ds
+
     @classmethod
     def is_preprocessed(cls, ds: xr.Dataset) -> bool:
         """Check if a dataset is already preprocessed.

@@ -295,16 +295,34 @@ class BaseDataset(abc.ABC):
             return
 
         for file in tqdm(self.catalog, unit="file", dynamic_ncols=True):
-            # Skip the file if it has already been downloaded (unless force is True)
-            if file.check() and not force:
-                logger.debug(f"{file.path} already exists, skipping download")
-                continue
+            # Check if file exists and needs preprocessing
+            file_exists = file.check()
+            needs_postprocess = False
+            
+            if file_exists and not force:
+                # File exists, check if it needs postprocessing
+                try:
+                    needs_postprocess = self._check_needs_postprocess(file.path)
+                    if needs_postprocess:
+                        logger.info(f"{file.path} exists but needs postprocessing, reprocessing...")
+                except Exception as e:
+                    logger.warning(
+                        f"Could not check if {file.path} needs postprocessing: {e}. "
+                        "Skipping file (will try to process during download if force=True)."
+                    )
+                    continue
+                
+                if not needs_postprocess:
+                    logger.debug(f"{file.path} already exists and is processed, skipping")
+                    continue
 
-            # We first must ensure the directory exists
-            file.path.parent.mkdir(parents=True, exist_ok=True)
+            # If file doesn't exist or needs postprocessing, proceed
+            if not file_exists:
+                # We first must ensure the directory exists
+                file.path.parent.mkdir(parents=True, exist_ok=True)
+                self._download_file(file)
 
-            self._download_file(file)
-
+            # Postprocess the file (either newly downloaded or existing file that needs processing)
             if file.check():
                 logger.debug("Postprocessing %s", file.path)
                 ds = xr.open_dataset(file.path).chunk("auto")
@@ -321,6 +339,21 @@ class BaseDataset(abc.ABC):
 
         logger.info(f"Downloaded {self}")
         logger.info("Cleaning and renaming coordinates")
+
+    def _check_needs_postprocess(self, file_path) -> bool:
+        """Check if an existing file needs postprocessing.
+        
+        This method can be overridden by subclasses to implement dataset-specific
+        checks for whether a file needs postprocessing. The default implementation
+        always returns False (assumes files don't need postprocessing if they exist).
+        
+        Args:
+            file_path: Path to the file to check
+            
+        Returns:
+            True if the file needs postprocessing, False otherwise
+        """
+        return False
 
     def _dataset_postprocess(self, ds: xr.Dataset | xr.DataArray, **kwargs):
         """Method to postprocess the dataset after it has been downloaded.
