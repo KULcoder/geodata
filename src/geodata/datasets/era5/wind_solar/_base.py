@@ -201,13 +201,12 @@ class ERA5WindSolarBaseDataset(ERA5BaseDataset):
         
         logger.info("Dataset needs preprocessing, applying preprocessing...")
         
-        # Load data before preprocessing to avoid file handle issues with parallel reading
-        # Preprocessing involves coordinate merging operations that can fail with lazy arrays
-        if hasattr(ds, 'load'):
-            logger.debug("Loading dataset before preprocessing to avoid parallel reading issues...")
-            ds = ds.load()
-        
-        # Apply preprocessing
+        # Apply preprocessing without loading into memory
+        # Most xarray operations (renames, calculations, coordinate changes) work fine with lazy arrays.
+        # Loading the entire dataset into memory can cause memory exhaustion with large datasets,
+        # especially in Dask workers. The dataset will be computed later when needed (e.g., when
+        # converting to dataframe or saving to disk), allowing Dask to manage memory more efficiently.
+        logger.debug("Applying preprocessing to lazy dataset (will compute later when needed)...")
         ds_preprocessed = preprocess_wind_solar_dataset(ds)
         
         # Optionally save to disk
