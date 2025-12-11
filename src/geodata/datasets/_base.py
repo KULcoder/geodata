@@ -345,7 +345,27 @@ class BaseDataset(abc.ABC):
             # Postprocess the file (either newly downloaded or existing file that needs processing)
             if file.check():
                 logger.debug("Postprocessing %s", file.path)
-                ds = xr.open_dataset(file.path).chunk("auto")
+                try:
+                    ds = xr.open_dataset(file.path).chunk("auto")
+                except (OSError, IOError) as e:
+                    # File is corrupted and cannot be opened
+                    logger.warning(
+                        f"File {file.path} is corrupted and cannot be opened: {e}. "
+                        "Deleting corrupted file and re-downloading."
+                    )
+                    file.path.unlink()
+                    # Re-download the file
+                    self._download_file(file)
+                    # Try opening again after re-download
+                    try:
+                        ds = xr.open_dataset(file.path).chunk("auto")
+                    except (OSError, IOError) as e2:
+                        logger.error(
+                            f"Failed to open file {file.path} even after re-download: {e2}. "
+                            "Skipping this file."
+                        )
+                        continue
+                
                 ds = self._rename_and_clean_coords(ds)
                 ds = self._dataset_postprocess(ds)
 
