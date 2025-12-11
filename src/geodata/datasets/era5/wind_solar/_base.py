@@ -71,8 +71,9 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
     
     # Compute variables needed for binary operations if requested
     # This avoids file handle issues with parallel reading when doing coordinate merging.
-    # We load these variables right before they're used in binary operations to ensure
-    # both operands are in memory, avoiding file access during coordinate merging.
+    # With parallel reading, individual .load() calls can't reliably access file handles.
+    # Instead, we compute a subset containing only the needed variables, which works
+    # better with Dask/parallel backends.
     if compute_binary_ops:
         vars_to_load = set()
         if 'ssrd' in ds.data_vars and 'ssr' in ds.data_vars:
@@ -82,10 +83,22 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
         if 'u100' in ds.data_vars and 'v100' in ds.data_vars:
             vars_to_load.update(['u100', 'v100'])
         
-        # Load variables (removes duplicates automatically via set)
-        for var in vars_to_load:
-            if var in ds.data_vars:
-                ds[var] = ds[var].load()
+        # Compute subset of dataset containing only needed variables
+        # With parallel reading, file handles can't be reliably accessed later,
+        # so we compute the subset now using Dask's compute() which handles
+        # parallel backends better than individual .load() calls.
+        if vars_to_load:
+            vars_list = [v for v in vars_to_load if v in ds.data_vars]
+            if vars_list:
+                # Extract subset and compute it - this triggers file access through
+                # xarray/Dask's proper mechanisms rather than individual variable access
+                logger.debug(f"Computing subset of variables: {vars_list}")
+                subset = ds[vars_list]
+                # Use compute() which works with Dask arrays and handles parallel backends
+                subset_computed = subset.compute()
+                # Assign computed variables back to the dataset
+                for var in vars_list:
+                    ds[var] = subset_computed[var]
     
     # Step 3: Calculate albedo
     if 'ssrd' in ds.data_vars and 'ssr' in ds.data_vars:
