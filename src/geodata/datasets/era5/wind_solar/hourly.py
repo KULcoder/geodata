@@ -16,6 +16,7 @@
 import logging
 import os
 import pprint
+import shutil
 import tempfile
 import zipfile
 from pathlib import Path
@@ -76,6 +77,96 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
     product = "reanalysis-era5-single-levels"
     product_type = "reanalysis"
 
+    def _save_extracted_files_for_debugging(self, tempdir: str, zip_path: str, save_path: Path):
+        """Save extracted NetCDF files and zip file to a debug directory for inspection.
+        
+        Args:
+            tempdir: Temporary directory containing extracted files
+            zip_path: Path to the downloaded zip file
+            save_path: Path where the final file will be saved
+            
+        Returns:
+            List of saved file paths
+        """
+        debug_dir = save_path.parent / "debug_extracted_files"
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save the zip file
+        zip_dest = debug_dir / "download.zip"
+        shutil.copy2(zip_path, zip_dest)
+        logger.info(f"Saved zip file: {zip_dest} (size: {os.path.getsize(zip_dest)} bytes)")
+        
+        # Save extracted NetCDF files
+        nc_files = [
+            os.path.join(tempdir, f)
+            for f in os.listdir(tempdir)
+            if f.endswith(".nc")
+        ]
+        
+        saved_files = [str(zip_dest)]
+        logger.info(f"Saving {len(nc_files)} extracted files to {debug_dir} for debugging")
+        for nc_file in nc_files:
+            dest_file = debug_dir / os.path.basename(nc_file)
+            shutil.copy2(nc_file, dest_file)
+            saved_files.append(str(dest_file))
+            logger.info(f"  Saved: {dest_file} (size: {os.path.getsize(dest_file)} bytes)")
+        
+        return saved_files
+
+    @staticmethod
+    def test_netcdf_files(file_paths):
+        """Test if NetCDF files are corrupted or can be opened.
+        
+        Args:
+            file_paths: List of file paths to test (can be str or Path)
+            
+        Returns:
+            dict: Results with 'valid_files', 'corrupted_files', and 'errors'
+        """
+        results = {
+            'valid_files': [],
+            'corrupted_files': [],
+            'errors': {}
+        }
+        
+        for file_path in file_paths:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                results['errors'][str(file_path)] = "File does not exist"
+                results['corrupted_files'].append(str(file_path))
+                continue
+            
+            file_size = file_path.stat().st_size
+            if file_size == 0:
+                results['errors'][str(file_path)] = "File is empty (0 bytes)"
+                results['corrupted_files'].append(str(file_path))
+                continue
+            
+            # Try to open the file
+            try:
+                with xr.open_dataset(file_path, decode_times=False) as ds:
+                    # Try to access basic properties
+                    dims = ds.dims
+                    coords = list(ds.coords.keys())
+                    data_vars = list(ds.data_vars.keys())
+                    
+                results['valid_files'].append({
+                    'path': str(file_path),
+                    'size': file_size,
+                    'dims': dict(dims),
+                    'coords': coords,
+                    'data_vars': data_vars
+                })
+                logger.info(f"✓ {file_path.name}: Valid ({file_size} bytes, {len(data_vars)} variables)")
+                
+            except Exception as e:
+                error_msg = str(e)
+                results['errors'][str(file_path)] = error_msg
+                results['corrupted_files'].append(str(file_path))
+                logger.error(f"✗ {file_path.name}: Corrupted - {error_msg}")
+        
+        return results
+
     def _download_file(self, file: AtomicDataset):
         year: int = file.year
         month: int = file.month
@@ -115,19 +206,26 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
             )
 
             with tempfile.TemporaryDirectory() as tempdir:
-                full_result.download(os.path.join(tempdir, "download.zip"))
-                with zipfile.ZipFile(
-                    os.path.join(tempdir, "download.zip"), "r"
-                ) as zip_ref:
+                zip_path = os.path.join(tempdir, "download.zip")
+                full_result.download(zip_path)
+                with zipfile.ZipFile(zip_path, "r") as zip_ref:
                     zip_ref.extractall(tempdir)
 
-                with xr.open_mfdataset(
-                    [
-                        os.path.join(tempdir, f)
-                        for f in os.listdir(tempdir)
-                        if f.endswith(".nc")
-                    ]
-                ) as ds:
+                nc_files = [
+                    os.path.join(tempdir, f)
+                    for f in os.listdir(tempdir)
+                    if f.endswith(".nc")
+                ]
+                
+                # Save extracted files for debugging if in testing mode
+                if self.testing:
+                    saved_files = self._save_extracted_files_for_debugging(tempdir, zip_path, save_path)
+                    logger.info(f"Extracted files saved to debug directory. You can test them with:")
+                    logger.info(f"  from geodata.datasets.era5.wind_solar.hourly import ERA5WindSolarHourlyDataset")
+                    logger.info(f"  results = ERA5WindSolarHourlyDataset.test_netcdf_files({saved_files[1:]})  # Skip zip file")
+                    logger.info(f"  print(results)")
+
+                with xr.open_mfdataset(nc_files) as ds:
                     ds.to_netcdf(save_path)
 
                 logger.info("Preprocessing complete with zipfile")
