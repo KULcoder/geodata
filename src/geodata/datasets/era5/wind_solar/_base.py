@@ -41,6 +41,91 @@ def _add_height(ds):
     ds = ds.drop("z")
     return ds
 
+
+def preprocess_wind_solar_dataset(ds: xr.Dataset) -> xr.Dataset:
+    """Preprocess ERA5 wind-solar dataset to convert raw variables to processed format.
+    
+    This function applies the same preprocessing logic used in prepare_func, but works
+    on an already-loaded dataset. This allows models to reuse the preprocessing logic
+    without duplicating code.
+    
+    Args:
+        ds: Raw ERA5 wind-solar dataset with variables like u100, v100, t2m, fdir, etc.
+    
+    Returns:
+        Preprocessed dataset with variables like influx_diffuse, influx_direct, 
+        wnd100m, temperature, etc.
+    """
+    # Step 1: Convert geopotential 'z' to geopotential height 'height'
+    if 'z' in ds.data_vars:
+        ds = _add_height(ds)
+    
+    # Step 2: Rename variables
+    if 'fdir' in ds.data_vars:
+        ds = ds.rename({"fdir": "influx_direct"})
+    if 'tisr' in ds.data_vars:
+        ds = ds.rename({"tisr": "influx_toa"})
+    
+    # Step 3: Calculate albedo
+    if 'ssrd' in ds.data_vars and 'ssr' in ds.data_vars:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ds["albedo"] = (
+                ((ds["ssrd"] - ds["ssr"]) / ds["ssrd"])
+                .fillna(0.0)
+                .assign_attrs(units="(0 - 1)", long_name="Albedo")
+            )
+    
+    # Step 4: Calculate influx_diffuse from ssrd and influx_direct
+    if 'ssrd' in ds.data_vars and 'influx_direct' in ds.data_vars:
+        ds["influx_diffuse"] = (ds["ssrd"] - ds["influx_direct"]).assign_attrs(
+            units="J m**-2", long_name="Surface diffuse solar radiation downwards"
+        )
+    
+    # Step 5: Drop ssrd and ssr (after using them)
+    if 'ssrd' in ds.data_vars:
+        ds = ds.drop("ssrd")
+    if 'ssr' in ds.data_vars:
+        ds = ds.drop("ssr")
+    
+    # Step 6: Convert from energy to power J m**-2 -> W m**-2 and clip negative fluxes
+    for a in ("influx_direct", "influx_diffuse", "influx_toa"):
+        if a in ds.data_vars:
+            ds[a] = ds[a].clip(min=0.0) / (60.0 * 60.0)
+            ds[a].attrs["units"] = "W m**-2"
+    
+    # Step 7: Calculate wnd100m from u100 and v100
+    if 'u100' in ds.data_vars and 'v100' in ds.data_vars:
+        # Use xarray operations to ensure we get a DataArray with attrs
+        wnd100m = (ds["u100"] ** 2 + ds["v100"] ** 2) ** 0.5
+        wnd100m.attrs.update({
+            "units": ds["u100"].attrs.get("units", "m s**-1"),
+            "long_name": "100 metre wind speed"
+        })
+        ds["wnd100m"] = wnd100m
+        ds = ds.drop(["u100", "v100"])
+    
+    # Step 8: Rename remaining variables
+    rename_map = {}
+    if 'ro' in ds.data_vars:
+        rename_map["ro"] = "runoff"
+    if 't2m' in ds.data_vars:
+        rename_map["t2m"] = "temperature"
+    if 'sp' in ds.data_vars:
+        rename_map["sp"] = "pressure"
+    if 'stl4' in ds.data_vars:
+        rename_map["stl4"] = "soil temperature"
+    if 'fsr' in ds.data_vars:
+        rename_map["fsr"] = "roughness"
+    
+    if rename_map:
+        ds = ds.rename(rename_map)
+    
+    # Step 9: Handle valid_time -> time rename (for new ERA5 format)
+    if "valid_time" in ds.coords:
+        ds = ds.rename({"valid_time": "time"})
+    
+    return ds
+
 class ERA5WindSolarBaseDataset(ERA5BaseDataset):
     """Base class for ERA5 wind and solar datasets.
     
@@ -72,47 +157,10 @@ class ERA5WindSolarBaseDataset(ERA5BaseDataset):
 
         with xr.open_dataset(fn) as ds:
             logger.info("Opening %s", fn)
-            ds = _add_height(ds)
             ds = _subset_x_y_era5(ds, xs, ys)
-
-            # specific modifications for wind-solar
-            ds = ds.rename({"fdir": "influx_direct", "tisr": "influx_toa"})
-            with np.errstate(divide="ignore", invalid="ignore"):
-                ds["albedo"] = (
-                    ((ds["ssrd"] - ds["ssr"]) / ds["ssrd"])
-                    .fillna(0.0)
-                    .assign_attrs(units="(0 - 1)", long_name="Albedo")
-                )
-            ds["influx_diffuse"] = (ds["ssrd"] - ds["influx_direct"]).assign_attrs(
-                units="J m**-2", long_name="Surface diffuse solar radiation downwards"
-            )
-            ds = ds.drop(["ssrd", "ssr"])
-
-            # Convert from energy to power J m**-2 -> W m**-2 and clip negative fluxes
-            for a in ("influx_direct", "influx_diffuse", "influx_toa"):
-                ds[a] = ds[a].clip(min=0.0) / (60.0 * 60.0)
-                ds[a].attrs["units"] = "W m**-2"
-
-            ds["wnd100m"] = np.sqrt(ds["u100"] ** 2 + ds["v100"] ** 2).assign_attrs(
-                units=ds["u100"].attrs["units"], long_name="100 metre wind speed"
-            )
-            ds = ds.drop(["u100", "v100"])
-
-            ds = ds.rename(
-                {
-                    "ro": "runoff",
-                    "t2m": "temperature",
-                    "sp": "pressure",
-                    "stl4": "soil temperature",
-                    "fsr": "roughness",
-                }
-            )
-
-            # New ERA5 format for hourly datasets
-            # See https://forum.ecmwf.int/t/new-time-format-in-era5-netcdf-files/3796
-            # TODO: We can remove this if we refactor geodata's convert module in the future
-            if "valid_time" in ds.coords:
-                ds = ds.rename({"valid_time": "time"})
+            
+            # Apply preprocessing using shared function
+            ds = preprocess_wind_solar_dataset(ds)
 
             yield (year, month), ds
 

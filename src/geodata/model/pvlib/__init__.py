@@ -13,6 +13,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-from .pvlib_runner import PVLib
+from ._base import PVLib
 
 __all__ = ["PVLib"]
