@@ -379,7 +379,12 @@ class BaseDataset(abc.ABC):
 
                 # xarray does not support overwriting files, so we must save the
                 # dataset to a new file and then rename it backwards
-                ds.to_netcdf(file.path.with_stem(file.path.stem + "_postprocessed"))
+                # Use h5netcdf engine for wind_solar datasets (required for ERA5 files)
+                engine = 'h5netcdf' if 'wind_solar' in self.weather_config else None
+                if engine:
+                    ds.to_netcdf(file.path.with_stem(file.path.stem + "_postprocessed"), engine=engine)
+                else:
+                    ds.to_netcdf(file.path.with_stem(file.path.stem + "_postprocessed"))
                 ds.close()
 
                 file.path.unlink()
