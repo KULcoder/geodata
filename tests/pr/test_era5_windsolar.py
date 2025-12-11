@@ -95,7 +95,7 @@ def test_wind_solar_workflow():
         spectral_model='first_solar',
         dc_ohmic_model='no_loss'
     )
-    assert model.model_config is not None, "model config should be successfully created"
+    assert model.config is not None, "model config should be successfully created"
     # TODO: assert it to the correct type
 
 
