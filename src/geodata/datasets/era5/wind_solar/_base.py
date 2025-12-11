@@ -15,6 +15,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 import xarray as xr
 import numpy as np
@@ -132,6 +133,101 @@ class ERA5WindSolarBaseDataset(ERA5BaseDataset):
     This class provides the prepare_func implementation specific to wind_solar datasets,
     which use single-level data from the reanalysis-era5-single-levels product.
     """
+
+    @classmethod
+    def is_preprocessed(cls, ds: xr.Dataset) -> bool:
+        """Check if a dataset is already preprocessed.
+        
+        A dataset is considered preprocessed if it contains processed variables
+        (like influx_diffuse, influx_direct, wnd100m, temperature) and does not
+        contain raw variables (like u100, v100, t2m, fdir, ssrd, ssr, z).
+        
+        Args:
+            ds: Dataset to check
+            
+        Returns:
+            True if dataset is preprocessed, False otherwise
+        """
+        # Check for raw variables that indicate preprocessing is needed
+        has_raw_vars = any(var in ds.data_vars for var in ['u100', 'v100', 't2m', 'fdir', 'ssrd', 'ssr', 'z'])
+        
+        # Check for processed variables that indicate preprocessing is done
+        has_processed_vars = any(var in ds.data_vars for var in [
+            'influx_diffuse', 'influx_direct', 'wnd100m', 'temperature', 'height'
+        ])
+        
+        # If we have processed vars and no raw vars, it's preprocessed
+        if has_processed_vars and not has_raw_vars:
+            return True
+        
+        # If we have raw vars, it's not preprocessed
+        if has_raw_vars:
+            return False
+        
+        # If we have neither, check if time coordinate is renamed (indicates preprocessing)
+        if "time" in ds.coords and "valid_time" not in ds.coords:
+            # Might be preprocessed, but we can't be sure without processed vars
+            # Return False to be safe
+            return False
+        
+        # Default: assume not preprocessed if we can't determine
+        return False
+
+    @classmethod
+    def ensure_preprocessed(
+        cls,
+        ds: xr.Dataset,
+        save_path: PathLike | None = None,
+        force: bool = False,
+    ) -> xr.Dataset:
+        """Ensure a dataset is preprocessed, preprocessing if necessary.
+        
+        This method checks if the dataset is preprocessed, and if not, applies
+        preprocessing. Optionally saves the preprocessed dataset to disk.
+        
+        Args:
+            ds: Dataset to check and preprocess if needed
+            save_path: Optional path to save preprocessed dataset. If None, dataset
+                is not saved to disk.
+            force: If True, force preprocessing even if dataset appears preprocessed
+            
+        Returns:
+            Preprocessed dataset
+        """
+        # Check if preprocessing is needed
+        if not force and cls.is_preprocessed(ds):
+            logger.debug("Dataset is already preprocessed, skipping preprocessing.")
+            return ds
+        
+        logger.info("Dataset needs preprocessing, applying preprocessing...")
+        
+        # Load data before preprocessing to avoid file handle issues with parallel reading
+        # Preprocessing involves coordinate merging operations that can fail with lazy arrays
+        if hasattr(ds, 'load'):
+            logger.debug("Loading dataset before preprocessing to avoid parallel reading issues...")
+            ds = ds.load()
+        
+        # Apply preprocessing
+        ds_preprocessed = preprocess_wind_solar_dataset(ds)
+        
+        # Optionally save to disk
+        if save_path is not None:
+            logger.info(f"Saving preprocessed dataset to {save_path}")
+            save_path = Path(save_path)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Save to temporary file first, then rename (xarray doesn't support overwriting)
+            temp_path = save_path.with_stem(save_path.stem + "_preprocessed")
+            ds_preprocessed.to_netcdf(temp_path)
+            
+            # Replace original file if it exists
+            if save_path.exists():
+                save_path.unlink()
+            temp_path.rename(save_path)
+            
+            logger.info(f"Preprocessed dataset saved to {save_path}")
+        
+        return ds_preprocessed
 
     @classmethod
     def prepare_func(

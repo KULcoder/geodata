@@ -474,25 +474,15 @@ class PVLib(BaseModel):
                 Dataset containing necessary variables to run `pvlib` model simulations.
 
             """
-            # Check if we have raw ERA5 variables (need preprocessing) or preprocessed variables
-            has_raw_vars = any(var in ds.data_vars for var in ['u100', 'v100', 't2m', 'fdir', 'ssrd', 'ssr', 'z'])
-            has_processed_vars = any(var in ds.data_vars for var in ['influx_diffuse', 'influx_direct', 'wnd100m', 'temperature', 'height'])
-            
-            # Apply preprocessing if we have raw variables
-            # Use the dataset's shared preprocessing function to avoid code duplication
-            if has_raw_vars and not has_processed_vars:
-                logger.debug("Detected raw ERA5 variables, applying preprocessing using dataset's shared function...")
-                try:
-                    from ...datasets.era5.wind_solar._base import preprocess_wind_solar_dataset
-                    # Load data before preprocessing to avoid file handle issues with parallel reading
-                    # Preprocessing involves coordinate merging operations that can fail with lazy arrays
-                    logger.debug("Loading dataset before preprocessing to avoid parallel reading issues...")
-                    ds = ds.load()
-                    ds = preprocess_wind_solar_dataset(ds)
-                    logger.debug("Preprocessing complete. Available variables: %s", list(ds.data_vars.keys()))
-                except ImportError:
-                    logger.warning("Could not import preprocess_wind_solar_dataset. Dataset may already be preprocessed.")
-                    # If import fails, assume dataset is already preprocessed or will fail with clear error
+            # Ensure dataset is preprocessed using the dataset class method
+            # This handles checking, preprocessing, and optionally saving
+            try:
+                from ...datasets.era5.wind_solar._base import ERA5WindSolarBaseDataset
+                ds = ERA5WindSolarBaseDataset.ensure_preprocessed(ds)
+                logger.debug("Preprocessing check complete. Available variables: %s", list(ds.data_vars.keys()))
+            except ImportError:
+                logger.warning("Could not import ERA5WindSolarBaseDataset. Dataset may already be preprocessed.")
+                # If import fails, assume dataset is already preprocessed or will fail with clear error
             
             # Extract only needed variables if specified
             if varnames:
