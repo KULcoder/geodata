@@ -345,8 +345,13 @@ class BaseDataset(abc.ABC):
             # Postprocess the file (either newly downloaded or existing file that needs processing)
             if file.check():
                 logger.debug("Postprocessing %s", file.path)
+                # Use h5netcdf engine for wind_solar datasets (required for ERA5 files)
+                engine = 'h5netcdf' if 'wind_solar' in self.weather_config else None
                 try:
-                    ds = xr.open_dataset(file.path).chunk("auto")
+                    if engine:
+                        ds = xr.open_dataset(file.path, engine=engine).chunk("auto")
+                    else:
+                        ds = xr.open_dataset(file.path).chunk("auto")
                 except (OSError, IOError) as e:
                     # File is corrupted and cannot be opened
                     logger.warning(
@@ -358,7 +363,10 @@ class BaseDataset(abc.ABC):
                     self._download_file(file)
                     # Try opening again after re-download
                     try:
-                        ds = xr.open_dataset(file.path).chunk("auto")
+                        if engine:
+                            ds = xr.open_dataset(file.path, engine=engine).chunk("auto")
+                        else:
+                            ds = xr.open_dataset(file.path).chunk("auto")
                     except (OSError, IOError) as e2:
                         logger.error(
                             f"Failed to open file {file.path} even after re-download: {e2}. "
