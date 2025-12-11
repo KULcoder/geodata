@@ -115,29 +115,30 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
             )
 
             with tempfile.TemporaryDirectory() as tempdir:
-                _count = 0
-                for _ in range(3):
-                    try:
-                        _count += 1
-                        full_result.download(os.path.join(tempdir, "download.zip"))
-                        break
-                    except Exception as e:
-                        logger.error("Error downloading file: %s", e)
-                        if _count == 3:
-                            raise
-
-                with zipfile.ZipFile(
-                    os.path.join(tempdir, "download.zip"), "r"
-                ) as zip_ref:
+                zip_path = os.path.join(tempdir, "download.zip")
+                full_result.download(zip_path)
+                
+                # Verify zip file is valid before extracting
+                try:
+                    with zipfile.ZipFile(zip_path, "r") as test_zip:
+                        test_zip.testzip()
+                except zipfile.BadZipFile as e:
+                    error_msg = f"Downloaded zip file is corrupted: {e}"
+                    logger.error(error_msg)
+                    raise OSError(error_msg)
+                
+                with zipfile.ZipFile(zip_path, "r") as zip_ref:
                     zip_ref.extractall(tempdir)
 
-                with xr.open_mfdataset(
-                    [
-                        os.path.join(tempdir, f)
-                        for f in os.listdir(tempdir)
-                        if f.endswith(".nc")
-                    ]
-                ) as ds:
+                nc_files = [
+                    os.path.join(tempdir, f)
+                    for f in os.listdir(tempdir)
+                    if f.endswith(".nc")
+                ]
+                
+                logger.debug(f"Extracted {len(nc_files)} NetCDF files: {[os.path.basename(f) for f in nc_files]}")
+
+                with xr.open_mfdataset(nc_files) as ds:
                     ds.to_netcdf(save_path)
 
                 logger.info("Preprocessing complete with zipfile")
