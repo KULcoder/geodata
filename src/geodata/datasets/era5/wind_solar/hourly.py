@@ -142,9 +142,9 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
                 results['corrupted_files'].append(str(file_path))
                 continue
             
-            # Try to open the file
+            # Try to open the file with h5netcdf engine (required for ERA5 files)
             try:
-                with xr.open_dataset(file_path, decode_times=False) as ds:
+                with xr.open_dataset(file_path, decode_times=False, engine='h5netcdf') as ds:
                     # Try to access basic properties
                     dims = ds.dims
                     coords = list(ds.coords.keys())
@@ -225,7 +225,7 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
                     logger.info(f"  results = ERA5WindSolarHourlyDataset.test_netcdf_files({saved_files[1:]})  # Skip zip file")
                     logger.info(f"  print(results)")
 
-                with xr.open_mfdataset(nc_files) as ds:
+                with xr.open_mfdataset(nc_files, engine='h5netcdf') as ds:
                     ds.to_netcdf(save_path)
 
                 logger.info("Preprocessing complete with zipfile")
