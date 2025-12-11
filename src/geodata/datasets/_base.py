@@ -290,8 +290,28 @@ class BaseDataset(abc.ABC):
                 the dataset, even if it has already been downloaded.
         """
 
+        # Check if all files are downloaded AND preprocessed
+        # Even if files exist, we need to verify they're properly processed
+        all_files_downloaded_and_processed = True
         if self.downloaded and not force:
-            logger.info(f"{self} has already been downloaded.")
+            # Files exist, but check if any need postprocessing
+            for file in self.catalog:
+                if file.check():
+                    try:
+                        if self._check_needs_postprocess(file.path):
+                            all_files_downloaded_and_processed = False
+                            logger.info(f"{file.path} exists but needs postprocessing")
+                            break
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not check if {file.path} needs postprocessing: {e}. "
+                            "Assuming it needs processing."
+                        )
+                        all_files_downloaded_and_processed = False
+                        break
+        
+        if all_files_downloaded_and_processed and self.downloaded and not force:
+            logger.info(f"{self} has already been downloaded and processed.")
             return
 
         for file in tqdm(self.catalog, unit="file", dynamic_ncols=True):
@@ -308,9 +328,9 @@ class BaseDataset(abc.ABC):
                 except Exception as e:
                     logger.warning(
                         f"Could not check if {file.path} needs postprocessing: {e}. "
-                        "Skipping file (will try to process during download if force=True)."
+                        "Will attempt to process it."
                     )
-                    continue
+                    needs_postprocess = True  # Assume it needs processing if check fails
                 
                 if not needs_postprocess:
                     logger.debug(f"{file.path} already exists and is processed, skipping")
