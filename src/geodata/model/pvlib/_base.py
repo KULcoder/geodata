@@ -419,9 +419,12 @@ class PVLib(BaseModel):
         logger.debug(f"Starting pvlib model computation for {num_coords} coordinates")
         start_time = time.time()
         
+        # Log progress every N coordinates or every 10% (whichever is more frequent)
+        log_interval = max(1, min(1000, num_coords // 10))
+        last_log_time = start_time
+        
         coord_subsets = []
         for idx, (y, x) in enumerate(unique_coords, 1):
-            coord_start_time = time.time()
             subset = weather_data.loc[(slice(None), y, x), :].reset_index(['x', 'y'])
             # Normalize longitude to [-180, 180] range for TimezoneFinder
             # which expects longitude in this range. Handle both [0, 360] and [-180, 180] formats
@@ -449,12 +452,17 @@ class PVLib(BaseModel):
 
             coord_subsets.append(subset)
             
-            # Log timing for each coordinate if debug level is enabled
-            coord_elapsed = time.time() - coord_start_time
-            logger.debug(
-                f"Processed coordinate ({y:.2f}, {x:.2f}) [{idx}/{num_coords}] "
-                f"in {coord_elapsed:.3f}s"
-            )
+            # Log progress periodically if debug level is enabled
+            if idx % log_interval == 0 or idx == num_coords:
+                elapsed = time.time() - start_time
+                elapsed_since_last = time.time() - last_log_time
+                rate = log_interval / elapsed_since_last if elapsed_since_last > 0 else 0
+                percent = 100 * idx / num_coords
+                logger.debug(
+                    f"Progress: {idx}/{num_coords} coordinates ({percent:.1f}%) "
+                    f"processed in {elapsed:.1f}s (rate: {rate:.1f} coords/s)"
+                )
+                last_log_time = time.time()
         
         elapsed_time = time.time() - start_time
         logger.debug(
