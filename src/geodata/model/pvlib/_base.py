@@ -24,10 +24,10 @@ TODO: Documentation here
 
 """
 
+import time
 import pandas as pd
 import numpy as np
 import xarray as xr
-from concurrent.futures import ThreadPoolExecutor
 from timezonefinder import TimezoneFinder
 from pvlib import pvsystem
 from pvlib.location import Location
@@ -35,8 +35,9 @@ from pvlib.modelchain import ModelChain
 from pvlib.atmosphere import gueymard94_pw
 from pvlib.solarposition import get_solarposition
 
-from .._base import BaseModel, MAX_WORKERS
+from .._base import BaseModel
 from geodata.logging import logger
+
 
 class ModelChainConfig:
     """
@@ -414,9 +415,13 @@ class PVLib(BaseModel):
         weather_data = self._prepare_pvlib_ds(ds, *vars).to_dataframe()
         unique_coords = weather_data.index.droplevel('time').drop_duplicates()
         
-        # Helper function to process a single coordinate
-        def process_coordinate(coord):
-            y, x = coord
+        num_coords = len(unique_coords)
+        logger.debug(f"Starting pvlib model computation for {num_coords} coordinates")
+        start_time = time.time()
+        
+        coord_subsets = []
+        for idx, (y, x) in enumerate(unique_coords, 1):
+            coord_start_time = time.time()
             subset = weather_data.loc[(slice(None), y, x), :].reset_index(['x', 'y'])
             # Normalize longitude to [-180, 180] range for TimezoneFinder
             # which expects longitude in this range. Handle both [0, 360] and [-180, 180] formats
@@ -441,16 +446,21 @@ class PVLib(BaseModel):
             subset['ac'] = mc.results.ac
             subset.loc[subset['ac'] < 0, 'ac'] = 0
             subset['pv'] = subset['ac'] / (ptc * n_mods)
+
+            coord_subsets.append(subset)
             
-            return subset
+            # Log timing for each coordinate if debug level is enabled
+            coord_elapsed = time.time() - coord_start_time
+            logger.debug(
+                f"Processed coordinate ({y:.2f}, {x:.2f}) [{idx}/{num_coords}] "
+                f"in {coord_elapsed:.3f}s"
+            )
         
-        # Process coordinates in parallel
-        num_coords = len(unique_coords)
-        # MAX_WORKERS respects job scheduler limits and defaults conservatively
-        logger.info(f"Processing {num_coords} coordinates with {MAX_WORKERS} workers")
-        
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            coord_subsets = list(executor.map(process_coordinate, unique_coords))
+        elapsed_time = time.time() - start_time
+        logger.debug(
+            f"Completed pvlib model computation for {num_coords} coordinates "
+            f"in {elapsed_time:.2f}s (avg {elapsed_time/num_coords:.3f}s per coordinate)"
+        )
 
         weather_data_final = pd.concat(coord_subsets)
 
