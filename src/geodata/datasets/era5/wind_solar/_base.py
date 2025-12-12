@@ -81,6 +81,8 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
     # With parallel reading, individual .load() calls can't reliably access file handles.
     # Instead, we compute a subset containing only the needed variables, which works
     # better with Dask/parallel backends.
+    # 
+    # For large datasets, we process in time chunks to avoid memory exhaustion.
     if compute_binary_ops:
         vars_to_load = set()
         if 'ssrd' in ds.data_vars and 'ssr' in ds.data_vars:
@@ -90,15 +92,18 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
         if 'u100' in ds.data_vars and 'v100' in ds.data_vars:
             vars_to_load.update(['u100', 'v100'])
         
-        # Chunk and compute subset of dataset containing only needed variables
-        # With parallel reading, file handles can't be reliably accessed later.
-        # To avoid memory exhaustion, we chunk the data first so Dask can process
-        # it in smaller pieces rather than loading everything at once.
         if vars_to_load:
             vars_list = [v for v in vars_to_load if v in ds.data_vars]
             if vars_list:
                 logger.debug(f"Chunking and computing subset of variables: {vars_list}")
                 subset = ds[vars_list]
+                
+                # Determine time dimension name
+                time_dim = None
+                for dim in ['valid_time', 'time']:
+                    if dim in subset.dims:
+                        time_dim = dim
+                        break
                 
                 # Check if data is already chunked (Dask-backed)
                 if HAS_DASK and da is not None:
@@ -109,29 +114,67 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
                 else:
                     is_chunked = False
                 
-                if not is_chunked:
-                    # Chunk the subset to enable Dask memory management
-                    # Use reasonable chunk sizes: chunk time dimension, keep spatial dims together
-                    # This allows Dask to process data in manageable pieces
-                    chunk_sizes = {}
-                    for dim in subset.dims:
-                        if dim in ['valid_time', 'time']:
-                            # Chunk time dimension (e.g., 100 timesteps at a time)
-                            chunk_sizes[dim] = min(100, subset.dims[dim])
-                        else:
-                            # Keep spatial dimensions unchunked or lightly chunked
-                            chunk_sizes[dim] = -1  # Single chunk per dimension
+                # For large datasets, process in time chunks to avoid memory exhaustion
+                # A full month of hourly data has ~744 timesteps, which is too large to load at once
+                if time_dim and subset.dims[time_dim] > 200:
+                    # Process in chunks of 100 timesteps
+                    chunk_size = 100
+                    time_size = subset.dims[time_dim]
+                    logger.debug(f"Processing {time_size} timesteps in chunks of {chunk_size} to manage memory")
                     
-                    logger.debug(f"Chunking subset with chunk sizes: {chunk_sizes}")
-                    subset = subset.chunk(chunk_sizes)
-                
-                # Now compute - Dask will handle memory through its scheduler
-                # This processes data in chunks rather than loading everything at once
-                subset_computed = subset.compute()
-                
-                # Assign computed variables back to the dataset
-                for var in vars_list:
-                    ds[var] = subset_computed[var]
+                    # Ensure data is chunked properly for incremental processing
+                    if not is_chunked:
+                        chunk_sizes = {}
+                        for dim in subset.dims:
+                            if dim == time_dim:
+                                chunk_sizes[dim] = chunk_size
+                            else:
+                                chunk_sizes[dim] = -1  # Single chunk per dimension
+                        logger.debug(f"Chunking subset with chunk sizes: {chunk_sizes}")
+                        subset = subset.chunk(chunk_sizes)
+                    
+                    # Process in chunks and store results
+                    computed_chunks = []
+                    for i in range(0, time_size, chunk_size):
+                        end_idx = min(i + chunk_size, time_size)
+                        logger.debug(f"Computing chunk {i//chunk_size + 1}/{(time_size-1)//chunk_size + 1}: timesteps {i} to {end_idx-1}")
+                        
+                        # Select time slice and compute
+                        chunk_subset = subset.isel({time_dim: slice(i, end_idx)})
+                        chunk_computed = chunk_subset.compute()
+                        computed_chunks.append(chunk_computed)
+                    
+                    # Concatenate chunks back together
+                    subset_computed = xr.concat(computed_chunks, dim=time_dim)
+                    
+                    # Clear chunk references to free memory
+                    del computed_chunks
+                    
+                    # Assign computed variables back to the dataset
+                    for var in vars_list:
+                        ds[var] = subset_computed[var]
+                    
+                    # Clear the computed subset after assignment
+                    del subset_computed
+                else:
+                    # For smaller datasets, use the original approach
+                    if not is_chunked:
+                        # Chunk the subset to enable Dask memory management
+                        chunk_sizes = {}
+                        for dim in subset.dims:
+                            if dim in ['valid_time', 'time']:
+                                chunk_sizes[dim] = min(100, subset.dims[dim])
+                            else:
+                                chunk_sizes[dim] = -1  # Single chunk per dimension
+                        logger.debug(f"Chunking subset with chunk sizes: {chunk_sizes}")
+                        subset = subset.chunk(chunk_sizes)
+                    
+                    # Now compute - Dask will handle memory through its scheduler
+                    subset_computed = subset.compute()
+                    
+                    # Assign computed variables back to the dataset
+                    for var in vars_list:
+                        ds[var] = subset_computed[var]
     
     # Step 3: Calculate albedo
     if 'ssrd' in ds.data_vars and 'ssr' in ds.data_vars:

@@ -349,9 +349,11 @@ class BaseDataset(abc.ABC):
                 engine = 'h5netcdf' if 'wind_solar' in self.weather_config else None
                 try:
                     if engine:
-                        ds = xr.open_dataset(file.path, engine=engine).chunk("auto")
+                        # For large datasets, use explicit chunking to manage memory better
+                        # Chunk by time dimension (100 timesteps) to allow incremental processing
+                        ds = xr.open_dataset(file.path, engine=engine, chunks={'time': 100, 'valid_time': 100})
                     else:
-                        ds = xr.open_dataset(file.path).chunk("auto")
+                        ds = xr.open_dataset(file.path, chunks={'time': 100, 'valid_time': 100})
                 except (OSError, IOError) as e:
                     # File is corrupted and cannot be opened
                     logger.warning(
@@ -364,9 +366,9 @@ class BaseDataset(abc.ABC):
                     # Try opening again after re-download
                     try:
                         if engine:
-                            ds = xr.open_dataset(file.path, engine=engine).chunk("auto")
+                            ds = xr.open_dataset(file.path, engine=engine, chunks={'time': 100, 'valid_time': 100})
                         else:
-                            ds = xr.open_dataset(file.path).chunk("auto")
+                            ds = xr.open_dataset(file.path, chunks={'time': 100, 'valid_time': 100})
                     except (OSError, IOError) as e2:
                         logger.error(
                             f"Failed to open file {file.path} even after re-download: {e2}. "
@@ -381,10 +383,31 @@ class BaseDataset(abc.ABC):
                 # dataset to a new file and then rename it backwards
                 # Use h5netcdf engine for wind_solar datasets (required for ERA5 files)
                 engine = 'h5netcdf' if 'wind_solar' in self.weather_config else None
+                
+                # Prepare encoding for efficient writing with chunking
+                # This allows Dask to write incrementally rather than loading everything into memory
+                encoding = {}
+                for var in ds.data_vars:
+                    # Determine time dimension
+                    time_dim = None
+                    for dim in ['time', 'valid_time']:
+                        if dim in ds[var].dims:
+                            time_dim = dim
+                            break
+                    
+                    if time_dim:
+                        # Chunk by time (100 timesteps) and keep spatial dims together
+                        # chunksizes must be a tuple matching the dimension order
+                        chunks = tuple(100 if dim == time_dim else -1 for dim in ds[var].dims)
+                        encoding[var] = {'chunksizes': chunks, 'zlib': True, 'complevel': 4}
+                    else:
+                        encoding[var] = {'zlib': True, 'complevel': 4}
+                
+                temp_path = file.path.with_stem(file.path.stem + "_postprocessed")
                 if engine:
-                    ds.to_netcdf(file.path.with_stem(file.path.stem + "_postprocessed"), engine=engine)
+                    ds.to_netcdf(temp_path, engine=engine, encoding=encoding)
                 else:
-                    ds.to_netcdf(file.path.with_stem(file.path.stem + "_postprocessed"))
+                    ds.to_netcdf(temp_path, encoding=encoding)
                 ds.close()
 
                 file.path.unlink()
