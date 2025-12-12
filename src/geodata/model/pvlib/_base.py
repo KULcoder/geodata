@@ -27,6 +27,7 @@ TODO: Documentation here
 import pandas as pd
 import numpy as np
 import xarray as xr
+from concurrent.futures import ThreadPoolExecutor
 from timezonefinder import TimezoneFinder
 from pvlib import pvsystem
 from pvlib.location import Location
@@ -34,7 +35,7 @@ from pvlib.modelchain import ModelChain
 from pvlib.atmosphere import gueymard94_pw
 from pvlib.solarposition import get_solarposition
 
-from .._base import BaseModel
+from .._base import BaseModel, MAX_WORKERS
 from geodata.logging import logger
 
 class ModelChainConfig:
@@ -412,8 +413,10 @@ class PVLib(BaseModel):
 
         weather_data = self._prepare_pvlib_ds(ds, *vars).to_dataframe()
         unique_coords = weather_data.index.droplevel('time').drop_duplicates()
-        coord_subsets = []
-        for y, x in unique_coords:
+        
+        # Helper function to process a single coordinate
+        def process_coordinate(coord):
+            y, x = coord
             subset = weather_data.loc[(slice(None), y, x), :].reset_index(['x', 'y'])
             tz_str = TimezoneFinder().timezone_at(lat=y, lng=x)
             if tz_str is None:
@@ -430,8 +433,24 @@ class PVLib(BaseModel):
             subset['ac'] = mc.results.ac
             subset.loc[subset['ac'] < 0, 'ac'] = 0
             subset['pv'] = subset['ac'] / (ptc * n_mods)
-
-            coord_subsets.append(subset)
+            
+            return subset
+        
+        # Process coordinates in parallel
+        num_coords = len(unique_coords)
+        # Convert MAX_WORKERS to int if it's a string (from environment variable)
+        max_workers = None
+        if MAX_WORKERS is not None:
+            try:
+                max_workers = int(MAX_WORKERS)
+            except (ValueError, TypeError):
+                logger.warning(
+                    "MAX_WORKERS environment variable is not an integer. Using default value."
+                )
+        logger.info(f"Processing {num_coords} coordinates with {max_workers or 'default'} workers")
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            coord_subsets = list(executor.map(process_coordinate, unique_coords))
 
         weather_data_final = pd.concat(coord_subsets)
 
