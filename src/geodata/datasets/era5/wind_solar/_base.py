@@ -116,10 +116,10 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
                 
                 # For large datasets, process in time chunks to avoid memory exhaustion
                 # A full month of hourly data has ~744 timesteps, which is too large to load at once
-                if time_dim and subset.dims[time_dim] > 200:
+                if time_dim and subset.sizes[time_dim] > 200:
                     # Process in chunks of 100 timesteps
                     chunk_size = 100
-                    time_size = subset.dims[time_dim]
+                    time_size = subset.sizes[time_dim]
                     logger.debug(f"Processing {time_size} timesteps in chunks of {chunk_size} to manage memory")
                     
                     # Ensure data is chunked properly for incremental processing

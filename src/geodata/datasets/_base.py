@@ -396,9 +396,12 @@ class BaseDataset(abc.ABC):
                             break
                     
                     if time_dim:
-                        # Chunk by time (100 timesteps) and keep spatial dims together
-                        # chunksizes must be a tuple matching the dimension order
-                        chunks = tuple(100 if dim == time_dim else -1 for dim in ds[var].dims)
+                        # Chunk by time (100 timesteps) and use full size for spatial dims
+                        # HDF5 doesn't accept -1, so we use the actual dimension size for non-time dims
+                        chunks = tuple(
+                            100 if dim == time_dim else ds[var].sizes[dim]
+                            for dim in ds[var].dims
+                        )
                         encoding[var] = {'chunksizes': chunks, 'zlib': True, 'complevel': 4}
                     else:
                         encoding[var] = {'zlib': True, 'complevel': 4}
