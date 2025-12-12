@@ -433,6 +433,16 @@ class PVLib(BaseModel):
         coord_subsets = []
         for idx, (y, x) in enumerate(unique_coords, 1):
             subset = weather_data.loc[(slice(None), y, x), :].reset_index(['x', 'y'])
+            
+            # Validate and clean weather data before passing to ModelChain
+            # Ensure all irradiance values are non-negative to prevent pvlib errors
+            irradiance_cols = ['dni', 'dhi', 'ghi']
+            for col in irradiance_cols:
+                if col in subset.columns:
+                    subset.loc[subset[col] < 0, col] = 0
+                    # Replace NaN values with 0
+                    subset[col] = subset[col].fillna(0)
+            
             # Normalize longitude to [-180, 180] range for TimezoneFinder
             # which expects longitude in this range. Handle both [0, 360] and [-180, 180] formats
             if x > 180:
@@ -451,9 +461,25 @@ class PVLib(BaseModel):
                 location, 
                 **model_chain_config.model_chain_to_kwargs()
             )
-            mc.run_model(subset)
             
-            subset['ac'] = mc.results.ac
+            # Add error handling for ModelChain.run_model to catch ValueError from single diode model
+            try:
+                mc.run_model(subset)
+                subset['ac'] = mc.results.ac
+            except ValueError as e:
+                # Handle cases where single diode model fails (e.g., negative v_oc)
+                # This can happen with invalid irradiance values or edge cases in pvlib
+                if "upper >= lower" in str(e) or "golden" in str(e).lower():
+                    logger.warning(
+                        f"pvlib single diode model failed for coordinate ({y:.3f}, {x:.3f}): {e}. "
+                        f"Setting AC power to zero for this coordinate."
+                    )
+                    # Create zero AC power with same index and dtype as expected
+                    subset['ac'] = pd.Series(0.0, index=subset.index, dtype=np.float64)
+                else:
+                    # Re-raise other ValueError exceptions
+                    raise
+            
             subset.loc[subset['ac'] < 0, 'ac'] = 0
             subset['pv'] = subset['ac'] / (ptc * n_mods)
 
@@ -655,14 +681,21 @@ class PVLib(BaseModel):
         """
         dhi = ds.influx_diffuse.values.ravel()
         dni = ds.influx_direct.values.ravel()
+        # Convert zenith to numpy array if it's a pandas Series
+        if hasattr(zenith, 'values'):
+            zenith_vals = zenith.values
+        else:
+            zenith_vals = zenith
+        # pvlib returns zenith in degrees, convert to radians for np.cos
+        zenith_rad = np.deg2rad(zenith_vals)
         ghi = np.clip(
-            dhi + dni * np.cos(zenith),
+            dhi + dni * np.cos(zenith_rad),
             0,
-            #np.Inf
-            np.inf # `np.Inf` was removed in the NumPy 2.0 release.
+            np.inf  # `np.Inf` was removed in the NumPy 2.0 release.
         )
 
-        reshaped_ghi = ghi.values.reshape(
+        # ghi is already a numpy array from np.clip, so use reshape directly
+        reshaped_ghi = ghi.reshape(
             ds.sizes['time'], 
             ds.sizes['y'], 
             ds.sizes['x']
