@@ -418,10 +418,18 @@ class PVLib(BaseModel):
         def process_coordinate(coord):
             y, x = coord
             subset = weather_data.loc[(slice(None), y, x), :].reset_index(['x', 'y'])
-            tz_str = TimezoneFinder().timezone_at(lat=y, lng=x)
+            # Normalize longitude to [-180, 180] range for TimezoneFinder
+            # which expects longitude in this range. Handle both [0, 360] and [-180, 180] formats
+            if x > 180:
+                x_normalized = x - 360.0
+            elif x < -180:
+                x_normalized = x + 360.0
+            else:
+                x_normalized = x
+            tz_str = TimezoneFinder().timezone_at(lat=y, lng=x_normalized)
             if tz_str is None:
                 tz_str = "UTC"  # Default to UTC if timezone not found
-            location = Location(latitude=y, longitude=x, tz=tz_str)
+            location = Location(latitude=y, longitude=x_normalized, tz=tz_str)
             
             mc = ModelChain(
                 system, 
@@ -438,7 +446,7 @@ class PVLib(BaseModel):
         
         # Process coordinates in parallel
         num_coords = len(unique_coords)
-        # MAX_WORKERS is already an int (defaults to CPU count if not set via env var)
+        # MAX_WORKERS respects job scheduler limits and defaults conservatively
         logger.info(f"Processing {num_coords} coordinates with {MAX_WORKERS} workers")
         
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:

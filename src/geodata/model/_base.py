@@ -192,20 +192,62 @@ def _should_use_parallel_reading() -> bool:
     logger.debug(f"_should_use_parallel_reading: Returning {XR_PARALLEL_DEFAULT}")
     return XR_PARALLEL_DEFAULT
 
+def _get_default_max_workers() -> int:
+    """Get the default number of workers, respecting job scheduler limits.
+    
+    Checks for common job scheduler environment variables and CPU limits,
+    then falls back to a conservative default that leaves some CPUs free.
+    
+    Returns:
+        int: Default number of workers to use.
+    """
+    # Check for explicit MAX_WORKERS environment variable first
+    max_workers_env = os.getenv("MAX_WORKERS")
+    if max_workers_env is not None:
+        try:
+            return int(max_workers_env)
+        except ValueError:
+            logger.warning(
+                "MAX_WORKERS environment variable is not an integer. "
+                "Checking for job scheduler limits instead."
+            )
+    
+    # Check for SLURM job scheduler (common on HPC clusters)
+    slurm_cpus = os.getenv("SLURM_CPUS_PER_TASK")
+    if slurm_cpus is not None:
+        try:
+            return int(slurm_cpus)
+        except ValueError:
+            pass
+    
+    # Check for OMP_NUM_THREADS (common for parallel workloads)
+    omp_threads = os.getenv("OMP_NUM_THREADS")
+    if omp_threads is not None:
+        try:
+            return int(omp_threads)
+        except ValueError:
+            pass
+    
+    # Check for PBS/Torque job scheduler
+    pbs_cpus = os.getenv("PBS_NCPUS")
+    if pbs_cpus is not None:
+        try:
+            return int(pbs_cpus)
+        except ValueError:
+            pass
+    
+    # Fall back to conservative default: leave 1 CPU free for system
+    cpu_count = os.cpu_count()
+    if cpu_count is None:
+        return 1
+    # Use max(1, cpu_count - 1) to leave at least 1 CPU free
+    # This is more conservative than using all CPUs
+    return max(1, cpu_count - 1)
+
+
 # Parse the MAX_WORKERS environment variable if present
-# Default to number of CPU cores if not set
-MAX_WORKERS_ENV = os.getenv("MAX_WORKERS")
-if MAX_WORKERS_ENV is not None:
-    try:
-        MAX_WORKERS = int(MAX_WORKERS_ENV)
-    except ValueError:
-        logger.warning(
-            "MAX_WORKERS environment variable is not an integer. Using default value (CPU count)."
-        )
-        MAX_WORKERS = os.cpu_count() or 1
-else:
-    # Default to number of CPU cores
-    MAX_WORKERS = os.cpu_count() or 1
+# Default respects job scheduler limits and leaves CPUs free
+MAX_WORKERS = _get_default_max_workers()
 
 
 class BaseModel(abc.ABC):
