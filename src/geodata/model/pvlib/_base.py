@@ -438,18 +438,10 @@ class PVLib(BaseModel):
         
         # Process coordinates in parallel
         num_coords = len(unique_coords)
-        # Convert MAX_WORKERS to int if it's a string (from environment variable)
-        max_workers = None
-        if MAX_WORKERS is not None:
-            try:
-                max_workers = int(MAX_WORKERS)
-            except (ValueError, TypeError):
-                logger.warning(
-                    "MAX_WORKERS environment variable is not an integer. Using default value."
-                )
-        logger.info(f"Processing {num_coords} coordinates with {max_workers or 'default'} workers")
+        # MAX_WORKERS is already an int (defaults to CPU count if not set via env var)
+        logger.info(f"Processing {num_coords} coordinates with {MAX_WORKERS} workers")
         
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             coord_subsets = list(executor.map(process_coordinate, unique_coords))
 
         weather_data_final = pd.concat(coord_subsets)

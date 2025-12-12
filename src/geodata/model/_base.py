@@ -193,15 +193,19 @@ def _should_use_parallel_reading() -> bool:
     return XR_PARALLEL_DEFAULT
 
 # Parse the MAX_WORKERS environment variable if present
-MAX_WORKERS = os.getenv("MAX_WORKERS")
-if MAX_WORKERS is not None:
+# Default to number of CPU cores if not set
+MAX_WORKERS_ENV = os.getenv("MAX_WORKERS")
+if MAX_WORKERS_ENV is not None:
     try:
-        max_workers = int(MAX_WORKERS)
+        MAX_WORKERS = int(MAX_WORKERS_ENV)
     except ValueError:
         logger.warning(
-            "MAX_WORKERS environment variable is not an integer. Using default value."
+            "MAX_WORKERS environment variable is not an integer. Using default value (CPU count)."
         )
-        MAX_WORKERS = None
+        MAX_WORKERS = os.cpu_count() or 1
+else:
+    # Default to number of CPU cores
+    MAX_WORKERS = os.cpu_count() or 1
 
 
 class BaseModel(abc.ABC):
