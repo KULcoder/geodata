@@ -417,10 +417,17 @@ class PVLib(BaseModel):
         
         num_coords = len(unique_coords)
         logger.debug(f"Starting pvlib model computation for {num_coords} coordinates")
+        
+        # Handle empty coordinates case
+        if num_coords == 0:
+            logger.warning("No coordinates found in dataset. Returning empty dataset.")
+            return xr.Dataset()
+        
         start_time = time.time()
         
         # Log progress every N coordinates or every 10% (whichever is more frequent)
-        log_interval = max(1, min(1000, num_coords // 10))
+        # Ensure log_interval is at least 1 and handle case when num_coords < 10
+        log_interval = max(1, min(1000, max(1, num_coords // 10)))
         last_log_time = start_time
         
         coord_subsets = []
@@ -465,9 +472,10 @@ class PVLib(BaseModel):
                 last_log_time = time.time()
         
         elapsed_time = time.time() - start_time
+        avg_time = elapsed_time / num_coords if num_coords > 0 else 0
         logger.debug(
             f"Completed pvlib model computation for {num_coords} coordinates "
-            f"in {elapsed_time:.2f}s (avg {elapsed_time/num_coords:.3f}s per coordinate)"
+            f"in {elapsed_time:.2f}s (avg {avg_time:.3f}s per coordinate)"
         )
 
         weather_data_final = pd.concat(coord_subsets)
