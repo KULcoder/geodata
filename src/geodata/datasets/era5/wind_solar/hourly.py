@@ -172,17 +172,8 @@ class ERA5WindSolarHourlyDataset(ERA5WindSolarBaseDataset):
         month: int = file.month
         save_path: Path = file.path
 
-        # For testing/debugging: limit to first 3 days and first 3 hours
-        if self.testing:
-            days = [f"{d:02d}" for d in range(1, 4)]  # Days 1-3
-            times = [f"{t:02d}:00" for t in range(0, 3)]  # Hours 0-2
-            logger.info(
-                f"Testing mode: Downloading only days {days} and times {times} "
-                f"for faster debugging"
-            )
-        else:
-            days = [f"{d:02d}" for d in range(1, 32)]  # All days in month
-            times = [f"{t:02d}:00" for t in range(0, 24)]  # All hours
+        days = [f"{d:02d}" for d in range(1, 32)]  # All days in month
+        times = [f"{t:02d}:00" for t in range(0, 24)]  # All hours
 
         full_request = {
             "product_type": self.product_type,
