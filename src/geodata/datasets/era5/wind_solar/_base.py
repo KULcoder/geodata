@@ -87,14 +87,18 @@ def _get_optimal_chunk_size(time_size: int, is_single_threaded: bool) -> int:
         # For single-threaded, use smaller chunks to manage memory
         return 100
     else:
-        # For parallel execution, use larger chunks for better efficiency
-        # Target ~200-500 timesteps per chunk depending on dataset size
-        if time_size <= 500:
-            return time_size  # Single chunk for small datasets
-        elif time_size <= 2000:
-            return 500  # Larger chunks for medium datasets
+        # For parallel execution, use conservative chunk sizes to avoid memory exhaustion
+        # Smaller chunks = more chunks = better parallelization, but need to balance with overhead
+        if time_size <= 200:
+            return time_size  # Single chunk for very small datasets
+        elif time_size <= 500:
+            return 200  # Moderate chunks for small datasets
+        elif time_size <= 1000:
+            return 250  # Moderate chunks for medium datasets
         else:
-            return 1000  # Very large chunks for large datasets (dask will parallelize)
+            # For large datasets, use smaller chunks to prevent memory issues
+            # This creates more chunks that can be processed in parallel without overwhelming memory
+            return 200
 
 
 def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = False) -> xr.Dataset:
@@ -168,22 +172,33 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
                 
                 time_size = subset.sizes[time_dim] if time_dim else 0
                 
+                # Estimate dataset size to determine processing strategy
+                # Calculate approximate memory per timestep (rough estimate)
+                spatial_dims = [d for d in subset.dims if d not in ['valid_time', 'time']]
+                spatial_size = 1
+                for dim in spatial_dims:
+                    spatial_size *= subset.sizes.get(dim, 1)
+                
+                # Rough estimate: 4 bytes per float32 * number of vars * spatial size
+                bytes_per_timestep = len(vars_list) * spatial_size * 4
+                estimated_memory_mb = (bytes_per_timestep * time_size) / (1024 * 1024)
+                
                 # Determine if we need sequential chunk processing
-                # Only use sequential processing for very large datasets in single-threaded mode
-                # or when data is not chunked and we're in single-threaded mode
+                # Use sequential processing when:
+                # 1. Single-threaded mode with large datasets
+                # 2. Very large datasets (>500MB estimated) even in parallel mode to avoid memory issues
                 use_sequential_chunks = (
-                    is_single_threaded and 
-                    time_dim and 
-                    time_size > 200 and
-                    (not is_chunked or time_size > 1000)
+                    (is_single_threaded and time_dim and time_size > 200) or
+                    (not is_single_threaded and time_dim and estimated_memory_mb > 500)
                 )
                 
                 if use_sequential_chunks:
-                    # Sequential chunk-by-chunk processing for single-threaded mode
+                    # Sequential chunk-by-chunk processing to avoid memory exhaustion
                     chunk_size = _get_optimal_chunk_size(time_size, is_single_threaded=True)
+                    mode_str = "single-threaded" if is_single_threaded else "large dataset"
                     logger.debug(
                         f"Sequential processing: {time_size} timesteps in chunks of {chunk_size} "
-                        f"(single-threaded mode, vars: {vars_list})"
+                        f"({mode_str}, vars: {vars_list}, ~{estimated_memory_mb:.1f}MB estimated)"
                     )
                     
                     # Ensure data is chunked properly for incremental processing
@@ -214,9 +229,10 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
                         ds[var] = subset_computed[var]
                     del subset_computed
                 else:
-                    # Parallel processing: let dask handle chunking and parallelization
+                    # Parallel processing: use conservative chunking to avoid memory exhaustion
                     if not is_chunked and time_dim:
                         # Chunk the subset to enable Dask parallel computation
+                        # Use smaller chunks to prevent overwhelming memory with parallel processing
                         chunk_size = _get_optimal_chunk_size(time_size, is_single_threaded)
                         chunk_sizes = {}
                         for dim in subset.dims:
@@ -227,10 +243,11 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
                         subset = subset.chunk(chunk_sizes)
                         logger.debug(
                             f"Parallel processing: chunked {time_size} timesteps with size {chunk_size} "
-                            f"(vars: {vars_list})"
+                            f"(vars: {vars_list}, ~{estimated_memory_mb:.1f}MB estimated)"
                         )
                     
                     # Compute in parallel - Dask will handle parallelization
+                    # The smaller chunk sizes ensure we don't overwhelm memory
                     subset_computed = subset.compute()
                     
                     # Assign computed variables back to the dataset
