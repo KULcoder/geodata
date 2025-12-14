@@ -214,11 +214,22 @@ def preprocess_wind_solar_dataset(ds: xr.Dataset, compute_binary_ops: bool = Fal
                     # Process in chunks sequentially
                     computed_chunks = []
                     num_chunks = (time_size - 1) // chunk_size + 1
-                    for i in range(0, time_size, chunk_size):
+                    chunk_start_time = time.time()
+                    for chunk_idx, i in enumerate(range(0, time_size, chunk_size), 1):
                         end_idx = min(i + chunk_size, time_size)
                         chunk_subset = subset.isel({time_dim: slice(i, end_idx)})
+                        chunk_compute_start = time.time()
                         chunk_computed = chunk_subset.compute()
+                        chunk_compute_time = time.time() - chunk_compute_start
                         computed_chunks.append(chunk_computed)
+                        # Log progress every chunk, or if chunk takes > 5 seconds
+                        if chunk_compute_time > 5.0 or chunk_idx % max(1, num_chunks // 4) == 0:
+                            elapsed = time.time() - chunk_start_time
+                            logger.debug(
+                                f"Processed chunk {chunk_idx}/{num_chunks} "
+                                f"(timesteps {i}-{end_idx-1}) in {chunk_compute_time:.2f}s "
+                                f"(total elapsed: {elapsed:.2f}s)"
+                            )
                     
                     # Concatenate chunks back together
                     subset_computed = xr.concat(computed_chunks, dim=time_dim)

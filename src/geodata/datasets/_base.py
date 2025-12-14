@@ -18,6 +18,7 @@ import dataclasses
 import hashlib
 import itertools
 import logging
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, Type, TypeVar
@@ -387,6 +388,9 @@ class BaseDataset(abc.ABC):
                 
                 # Prepare encoding for efficient writing with chunking
                 # This allows Dask to write incrementally rather than loading everything into memory
+                write_start = time.time()
+                logger.debug(f"Preparing to write postprocessed dataset to {file.path}")
+                
                 encoding = {}
                 for var in ds.data_vars:
                     # Determine time dimension
@@ -408,14 +412,24 @@ class BaseDataset(abc.ABC):
                         encoding[var] = {'zlib': True, 'complevel': 4}
                 
                 temp_path = file.path.with_stem(file.path.stem + "_postprocessed")
+                logger.debug(f"Writing dataset to {temp_path} (this may take a while for large datasets)...")
                 if engine:
                     ds.to_netcdf(temp_path, engine=engine, encoding=encoding)
                 else:
                     ds.to_netcdf(temp_path, encoding=encoding)
+                write_time = time.time() - write_start
+                if write_time > 1.0:  # Only log if it takes more than 1 second
+                    logger.debug(f"Dataset written in {write_time:.2f}s")
                 ds.close()
 
+                # Rename the postprocessed file to replace the original
+                rename_start = time.time()
+                logger.debug(f"Replacing original file with postprocessed version...")
                 file.path.unlink()
-                file.path.with_stem(file.path.stem + "_postprocessed").rename(file.path)
+                temp_path.rename(file.path)
+                rename_time = time.time() - rename_start
+                if rename_time > 1.0:
+                    logger.debug(f"File rename completed in {rename_time:.2f}s")
 
         logger.info(f"Downloaded {self}")
         logger.info("Cleaning and renaming coordinates")
