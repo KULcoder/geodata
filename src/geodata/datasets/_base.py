@@ -349,11 +349,11 @@ class BaseDataset(abc.ABC):
                 engine = 'h5netcdf' if 'wind_solar' in self.weather_config else None
                 try:
                     if engine:
-                        # For large datasets, use explicit chunking to manage memory better
-                        # Chunk by time dimension (100 timesteps) to allow incremental processing
-                        ds = xr.open_dataset(file.path, engine=engine, chunks={'time': 100, 'valid_time': 100})
+                        # Use "auto" chunks to respect file's native chunking and avoid alignment warnings
+                        # This prevents the UserWarning about chunk separation
+                        ds = xr.open_dataset(file.path, engine=engine, chunks="auto")
                     else:
-                        ds = xr.open_dataset(file.path, chunks={'time': 100, 'valid_time': 100})
+                        ds = xr.open_dataset(file.path, chunks="auto")
                 except (OSError, IOError) as e:
                     # File is corrupted and cannot be opened
                     logger.warning(
@@ -366,9 +366,9 @@ class BaseDataset(abc.ABC):
                     # Try opening again after re-download
                     try:
                         if engine:
-                            ds = xr.open_dataset(file.path, engine=engine, chunks={'time': 100, 'valid_time': 100})
+                            ds = xr.open_dataset(file.path, engine=engine, chunks="auto")
                         else:
-                            ds = xr.open_dataset(file.path, chunks={'time': 100, 'valid_time': 100})
+                            ds = xr.open_dataset(file.path, chunks="auto")
                     except (OSError, IOError) as e2:
                         logger.error(
                             f"Failed to open file {file.path} even after re-download: {e2}. "
@@ -377,6 +377,7 @@ class BaseDataset(abc.ABC):
                         continue
                 
                 ds = self._rename_and_clean_coords(ds)
+                # Postprocess will handle chunking as needed for memory management
                 ds = self._dataset_postprocess(ds)
 
                 # xarray does not support overwriting files, so we must save the
