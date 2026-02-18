@@ -19,6 +19,7 @@ import importlib.util
 import os
 import platform
 import shutil
+import time
 from typing import Optional
 
 import xarray as xr
@@ -338,6 +339,7 @@ class BaseModel(abc.ABC):
 
                 engine = _get_xr_engine()
                 parallel = _should_use_parallel_reading()
+                io_start = time.perf_counter()
                 logger.info(
                     f"prepare: Opening {len(result.ref_files)} files with engine={engine}, parallel={parallel}"
                 )
@@ -346,10 +348,42 @@ class BaseModel(abc.ABC):
                     engine=engine,
                     parallel=parallel,
                 ) as ds:
-                    prepared_ds = self._prepare_dataset(ds)
-                    result.register(prepared_ds)
+                    open_elapsed = time.perf_counter() - io_start
+                    logger.info(
+                        "prepare: open_mfdataset for %04d-%02d completed in %.2fs",
+                        result.year,
+                        result.month,
+                        open_elapsed,
+                    )
 
+                    compute_start = time.perf_counter()
+                    prepared_ds = self._prepare_dataset(ds)
+                    compute_elapsed = time.perf_counter() - compute_start
+                    logger.info(
+                        "prepare: _prepare_dataset for %04d-%02d completed in %.2fs",
+                        result.year,
+                        result.month,
+                        compute_elapsed,
+                    )
+
+                    register_start = time.perf_counter()
+                    result.register(prepared_ds)
+                    register_elapsed = time.perf_counter() - register_start
+                    logger.info(
+                        "prepare: register for %04d-%02d completed in %.2fs",
+                        result.year,
+                        result.month,
+                        register_elapsed,
+                    )
+
+            dump_start = time.perf_counter()
             result.dump()
+            logger.info(
+                "prepare: dump metadata for %04d-%02d completed in %.2fs",
+                result.year,
+                result.month,
+                time.perf_counter() - dump_start,
+            )
         logger.info("Model prepared successfully.")
 
     @abc.abstractmethod
